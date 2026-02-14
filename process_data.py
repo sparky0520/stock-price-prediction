@@ -36,12 +36,12 @@ def process_data():
     output_dir = "data/processed"
     os.makedirs(output_dir, exist_ok=True)
     
-    intraday_path = os.path.join(input_dir, "BHEL_intraday_5m.csv")
+    intraday_path = os.path.join(input_dir, "BHEL_1m.csv")
     if not os.path.exists(intraday_path):
         print(f"Error: {intraday_path} not found. Run fetch_data.py first.")
         return
 
-    print("Loading intraday data...")
+    print("Loading 1-minute intraday data...")
     df = pd.read_csv(intraday_path, parse_dates=['Datetime'], index_col='Datetime')
     
     # Feature Engineering
@@ -73,18 +73,18 @@ def process_data():
     df['DayOfWeek'] = df.index.dayofweek
 
     # --- Target Variable Creation ---
-    # Prediction Horizon: Next 3 candles (15 mins)
-    # Label: Buy if return > 0.5%, Sell if return < -0.5%, else Hold
+    # Prediction Horizon: Next 5 minutes (5 candles)
+    # Label: Buy if return > 0.3%, Sell if return < -0.3%, else Hold (Lower threshold for 1m scalping)
     
-    future_horizon = 3
-    threshold = 0.005 # 0.5%
+    future_horizon = 5
+    threshold = 0.003 # 0.3%
     
     df['Future_Close'] = df['Close'].shift(-future_horizon)
-    df['Return_3c'] = (df['Future_Close'] - df['Close']) / df['Close']
+    df['Return_5m'] = (df['Future_Close'] - df['Close']) / df['Close']
     
     conditions = [
-        (df['Return_3c'] > threshold),
-        (df['Return_3c'] < -threshold)
+        (df['Return_5m'] > threshold),
+        (df['Return_5m'] < -threshold)
     ]
     choices = ['Buy', 'Sell']
     df['Target'] = np.select(conditions, choices, default='Hold')
@@ -92,7 +92,7 @@ def process_data():
     # Drop NaNs created by rolling windows and shifting
     df.dropna(inplace=True)
     
-    output_path = os.path.join(output_dir, "BHEL_model_ready.csv")
+    output_path = os.path.join(output_dir, "BHEL_1m_model_ready.csv")
     df.to_csv(output_path)
     print(f"Processed data saved to {output_path}")
     print(f"Dataset shape: {df.shape}")
