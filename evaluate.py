@@ -18,10 +18,10 @@ import matplotlib.pyplot as plt
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-from environment import StockTradingEnv
+from environment import StockTradingEnv, FEATURE_COLS
 
 # --- Configuration ---
-DATA_PATH = "data/processed/BHEL_1m_model_ready.csv"
+DATA_PATH = "data/processed/BTC_USDT_1m_model_ready.csv"
 TRAIN_SPLIT = 0.80
 INITIAL_BALANCE = 100_000.0
 RESULTS_DIR = "results"
@@ -61,10 +61,11 @@ def run_backtest(model: PPO, df: pd.DataFrame) -> pd.DataFrame:
 
 def buy_and_hold_value(df: pd.DataFrame) -> pd.Series:
     """Simulate a simple buy-and-hold strategy."""
-    entry_price = df["Close"].iloc[0]
+    price_col = "Raw_Close" if "Raw_Close" in df.columns else "Close"
+    entry_price = df[price_col].iloc[0]
     shares = INITIAL_BALANCE // entry_price
     remainder = INITIAL_BALANCE - shares * entry_price
-    return df["Close"] * shares + remainder
+    return df[price_col] * shares + remainder
 
 
 def main():
@@ -74,9 +75,23 @@ def main():
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    # --- Load Data ---
+    # --- Load & Process Data ---
     print("Loading dataset...")
-    df = pd.read_csv(DATA_PATH, parse_dates=["Datetime"], index_col="Datetime")
+    df = pd.read_csv(DATA_PATH, usecols=["Datetime"] + FEATURE_COLS + ["Close"], parse_dates=["Datetime"], index_col="Datetime")
+    
+    print("Pre-processing data (Normalization & Float32 casting)...")
+    # Keep a raw copy for evaluation results
+    df["Raw_Close"] = df["Close"].astype(np.float32)
+
+    for col in FEATURE_COLS:
+        df[col] = df[col].astype(np.float32)
+
+    # Normalize features for the model
+    means = df[FEATURE_COLS].mean()
+    stds = df[FEATURE_COLS].std().replace(0, 1)
+    df[FEATURE_COLS] = (df[FEATURE_COLS] - means) / stds
+
+    df = df.reset_index(drop=True)
     test_df = df.iloc[int(len(df) * TRAIN_SPLIT):].copy().reset_index(drop=True)
     print(f"Test set size: {len(test_df):,} bars")
 
@@ -126,11 +141,12 @@ def main():
     axes[0].grid(alpha=0.3)
 
     # Price with Buy/Sell markers
-    axes[1].plot(test_df["Close"].values, color="gray", linewidth=0.7, label="BHEL Price")
+    price_col = "Raw_Close" if "Raw_Close" in test_df.columns else "Close"
+    axes[1].plot(test_df[price_col].values, color="gray", linewidth=0.7, label="BTC Price")
     buy_steps = history[history["action"] == 1]["step"].values
     sell_steps = history[history["action"] == 2]["step"].values
-    axes[1].scatter(buy_steps, test_df["Close"].iloc[buy_steps].values, marker="^", color="green", s=40, label="Buy", zorder=5)
-    axes[1].scatter(sell_steps, test_df["Close"].iloc[sell_steps].values, marker="v", color="red", s=40, label="Sell", zorder=5)
+    axes[1].scatter(buy_steps, test_df[price_col].iloc[buy_steps].values, marker="^", color="green", s=40, label="Buy", zorder=5)
+    axes[1].scatter(sell_steps, test_df[price_col].iloc[sell_steps].values, marker="v", color="red", s=40, label="Sell", zorder=5)
     axes[1].set_ylabel("Close Price (₹)")
     axes[1].set_xlabel("Time Step (1-min bars)")
     axes[1].legend()

@@ -25,10 +25,7 @@ FEATURE_COLS = [
 class StockTradingEnv(gym.Env):
     """
     A Gymnasium-compatible environment for intraday stock trading.
-    
-    Simulates a single stock with an account that has an initial balance.
-    The agent can Buy, Sell or Hold at each timestep (1-minute candle).
-    Only one unit of stock can be held at a time for simplicity.
+    Optimized for memory by using pre-normalized float32 data.
     """
 
     metadata = {"render_modes": ["human"]}
@@ -36,14 +33,10 @@ class StockTradingEnv(gym.Env):
     def __init__(self, df: pd.DataFrame, initial_balance: float = 100_000.0, render_mode=None):
         super().__init__()
 
+        # Expecting df to be pre-filtered and pre-normalized for performance
         self.df = df.reset_index(drop=True)
         self.initial_balance = initial_balance
         self.render_mode = render_mode
-
-        # --- Validate feature columns ---
-        missing = [c for c in FEATURE_COLS if c not in self.df.columns]
-        if missing:
-            raise ValueError(f"DataFrame is missing columns: {missing}")
 
         # --- Spaces ---
         # Observation: all features + [balance_ratio, shares_held, cost_basis_ratio]
@@ -51,13 +44,8 @@ class StockTradingEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(n_features,), dtype=np.float32
         )
-
         # Actions: 0=Hold, 1=Buy, 2=Sell
         self.action_space = spaces.Discrete(3)
-
-        # Normalization stats (computed once on init)
-        self._means = self.df[FEATURE_COLS].mean()
-        self._stds = self.df[FEATURE_COLS].std().replace(0, 1)
 
         # Internal state (set by reset)
         self._current_step: int = 0
@@ -66,10 +54,6 @@ class StockTradingEnv(gym.Env):
         self._cost_basis: float = 0.0
         self._total_portfolio_value: float = initial_balance
         self._history: list = []
-
-    # ------------------------------------------------------------------
-    # Core Gymnasium API
-    # ------------------------------------------------------------------
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -83,9 +67,10 @@ class StockTradingEnv(gym.Env):
         return self._get_observation(), {}
 
     def step(self, action: int):
-        current_price = float(self.df.loc[self._current_step, "Close"])
+        # Use Raw_Close for actual money/PnL calculation if it exists
+        price_col = "Raw_Close" if "Raw_Close" in self.df.columns else "Close"
+        current_price = float(self.df.loc[self._current_step, price_col])
         prev_portfolio_value = self._total_portfolio_value
-        reward = 0.0
 
         # --- Execute Action ---
         if action == 1:  # Buy
@@ -105,10 +90,10 @@ class StockTradingEnv(gym.Env):
         self._total_portfolio_value = self._balance + self._shares_held * current_price
         reward = self._total_portfolio_value - prev_portfolio_value
 
-        # Small penalty for holding a position overnight (end of day indicator)
-        # Encourage squaring off before market close
-        if self.df.loc[self._current_step, "Hour"] == 15 and self._shares_held > 0:
-            reward -= current_price * 0.005  # forced-closure penalty
+        # Small penalty for forced-closure (Hour 15) for BHEL scripts compatibility
+        # Crypto is 24/7, but we keep the logic to avoid breaking shared environments
+        if "Hour" in self.df.columns and self.df.loc[self._current_step, "Hour"] == 15 and self._shares_held > 0:
+             reward -= current_price * 0.005 
 
         self._history.append({
             "step": self._current_step,
@@ -137,13 +122,9 @@ class StockTradingEnv(gym.Env):
             f"Portfolio: {self._total_portfolio_value:12.2f}"
         )
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
     def _get_observation(self) -> np.ndarray:
-        raw_features = self.df.loc[self._current_step, FEATURE_COLS].values.astype(np.float32)
-        normalized = ((raw_features - self._means.values) / self._stds.values).astype(np.float32)
+        # Features are pre-normalized in the provided DataFrame
+        normalized = self.df.loc[self._current_step, FEATURE_COLS].values.astype(np.float32)
 
         # Account state (normalized relative to initial balance)
         balance_ratio = np.float32(self._balance / self.initial_balance)
@@ -153,5 +134,4 @@ class StockTradingEnv(gym.Env):
         return np.concatenate([normalized, [balance_ratio, shares_held, cost_basis_ratio]])
 
     def get_history_df(self) -> pd.DataFrame:
-        """Return trading history as a DataFrame for evaluation."""
         return pd.DataFrame(self._history)

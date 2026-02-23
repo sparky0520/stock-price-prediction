@@ -4,7 +4,7 @@ import os
 
 def fetch_data():
     ticker_symbol = "BHEL.NS"
-    data_dir = "data/raw"
+    data_dir = "../../data/raw"
     os.makedirs(data_dir, exist_ok=True)
 
     print(f"Fetching data for {ticker_symbol}...")

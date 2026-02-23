@@ -10,7 +10,7 @@ def fetch_crypto_data(symbol='BTC/USDT', timeframe='1m', years=3):
         'enableRateLimit': True,  # ccxt respects rate limits automatically
     })
     
-    data_dir = "data/raw"
+    data_dir = "../../data/raw"
     os.makedirs(data_dir, exist_ok=True)
     
     # Calculate start timestamp (milliseconds)
