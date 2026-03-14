@@ -172,6 +172,30 @@ def build_feature_row(candles: deque[dict]) -> np.ndarray | None:
     return latest[FEATURE_COLUMNS].to_numpy(dtype=float)
 
 
+async def preload_recent_candles(
+    exchange: ccxtpro.Exchange, symbol: str, timeframe: str, target: int = 50
+) -> list[dict]:
+    # Request one extra bar and drop the newest one to avoid using an in-progress minute.
+    ohlcv = await exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=target + 1)
+    if not ohlcv:
+        return []
+
+    closed_bars = ohlcv[:-1] if len(ohlcv) > target else ohlcv
+    recent = closed_bars[-target:]
+
+    return [
+        {
+            "Datetime": datetime.fromtimestamp(ts / 1000, tz=timezone.utc),
+            "Open": float(open_price),
+            "High": float(high_price),
+            "Low": float(low_price),
+            "Close": float(close_price),
+            "Volume": float(volume),
+        }
+        for ts, open_price, high_price, low_price, close_price, volume in recent
+    ]
+
+
 async def stream_and_simulate() -> None:
     exchange = ccxtpro.binance()
     model = CatBoostClassifier()
@@ -182,7 +206,11 @@ async def stream_and_simulate() -> None:
     current_candle: dict | None = None
     last_base_volume: float | None = None
 
+    historical_candles = await preload_recent_candles(exchange, SYMBOL, TIMEFRAME, target=50)
+    candles.extend(historical_candles)
+
     print(f"Loaded model from {MODEL_PATH}")
+    print(f"Preloaded {len(historical_candles)} recent {TIMEFRAME} candles")
     print(f"Streaming {SYMBOL} ticker via websocket...")
 
     try:
